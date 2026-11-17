@@ -35,7 +35,13 @@ func newValidator() *validator.Validate {
 // DecodeJSON reads a single JSON object from the body into dst, rejecting
 // unknown fields and trailing data, then validates dst using struct tags.
 func DecodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
-	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	return DecodeJSONLimit(w, r, dst, maxBodyBytes)
+}
+
+// DecodeJSONLimit is DecodeJSON with a custom body size cap in bytes, for the
+// few endpoints (such as contact sync) that legitimately send more data.
+func DecodeJSONLimit(w http.ResponseWriter, r *http.Request, dst any, limit int64) error {
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 
@@ -100,6 +106,16 @@ func describe(fe validator.FieldError) string {
 	default:
 		return "is invalid"
 	}
+}
+
+// BearerToken extracts the token from an "Authorization: Bearer <token>" header.
+func BearerToken(r *http.Request) (string, bool) {
+	scheme, token, found := strings.Cut(r.Header.Get("Authorization"), " ")
+	token = strings.TrimSpace(token)
+	if !found || !strings.EqualFold(scheme, "Bearer") || token == "" {
+		return "", false
+	}
+	return token, true
 }
 
 // PathUUID parses a UUID URL parameter; malformed ids are a 404, not a 400,

@@ -26,7 +26,8 @@ internal/
   config       environment loading and validation
   server       router and middleware stack
   auth         login, JWT access tokens, rotating refresh tokens
-  hubs cars    one package per feature: handler -> service -> repository
+  hubs cars bookings contacts customer notifications catalog
+               one package per feature: handler -> service -> repository
   platform/    shared plumbing: database, httpx, crypto, logger, observability, dberr
 api/           OpenAPI contract
 ```
@@ -56,6 +57,32 @@ Native build (no Docker):
 
 The `Dockerfile` builds a minimal non-root image if you prefer Docker.
 
+## What the API covers
+
+| Area | Endpoints |
+|---|---|
+| Admin auth | `POST /v1/auth/login, refresh, logout`, `GET /v1/auth/me`, `GET/POST /v1/admins` |
+| Hubs and cars (admin) | `/v1/hubs`, `/v1/cars`, car photo upload and delete, `GET /v1/users` |
+| Public catalog | `GET /v1/public/hubs`, `/v1/public/cars` (filter by hub and free time window), `/v1/public/cars/{id}` |
+| Customer login | `POST /v1/customer/auth/otp/request, otp/verify, refresh, logout`, `GET/PATCH /v1/customer/me` |
+| Bookings | customer: create, list, get, cancel. admin: list, get, start, complete, cancel |
+| Contacts | customer: `sync`, `status`, `deletion`. admin: `GET /v1/bookings/{id}/contacts` (audited) |
+| Push | customer: register and unregister device. admin: `POST /v1/notifications` |
+
+Rules worth knowing:
+
+- A car can never have two overlapping open bookings. This is enforced by a Postgres exclusion constraint, so it holds even when requests arrive at the same instant.
+- Booking is refused with `428 contacts_required` until the customer has synced contacts (`REQUIRE_CONTACTS_FOR_BOOKING`). Phone numbers are normalized to E.164 and deduplicated per customer, so syncing again for another booking never creates duplicates.
+- Contacts are encrypted with AES-256-GCM, hashed with HMAC for deduplication, deletable by the customer once no booking is open, and deleted automatically `CONTACTS_RETENTION_DAYS` after the last ride by an hourly job.
+- Admins can view a booking's contacts only while it is open or within the retention period afterwards, and each view is written to `audit_log`.
+
+## Before production
+
+- **OTP delivery.** Only a console sender exists, and the API refuses to start in production with it, because it writes login codes to the logs. Add an SMS provider (for example MSG91, which needs DLT registration in India) behind the `otp.Sender` interface.
+- **Push notifications.** Set `FIREBASE_CREDENTIALS_B64`. Until then notifications are logged, not sent. Nothing has been tested against real FCM delivery.
+- **Storage.** Photo upload is tested against the Neon bucket. Photo links are temporary (one hour) and are generated on every response.
+- **Rotate credentials** that were pasted into chat, and set `APP_ENV=production`, `TRUSTED_PROXY_HOPS` and `SENTRY_DSN` on Render.
+
 ## Not built yet
 
-Customer users, bookings (with the overlap-proof exclusion constraint), contacts sync, FCM notifications, photo uploads to object storage, OTP login, background jobs (token and contact cleanup). Handler and service tests against a database are also still to do; current tests cover config, crypto, tokens, plate rules and IP handling.
+Payments, driving licence upload, admin editing of bookings, push topics and broadcast, and database-backed tests for handlers (current tests cover business rules, crypto, tokens, phone numbers, contacts, bookings and push with in-memory fakes).

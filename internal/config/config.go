@@ -37,6 +37,25 @@ type Config struct {
 	ProxyHops     int
 	RateLimit     int // requests per minute per client, all routes
 	LoginRateLimt int // requests per minute per client, login only
+
+	// Contacts (stored only to trace a car after theft or misuse).
+	ContactsMasterKey     string // base64, at least 32 bytes
+	ContactsRetentionDays int
+	RequireContactsToBook bool
+
+	// One-time codes.
+	OTPProvider string // "console" (development only)
+	OTPTTL      time.Duration
+
+	// Object storage for car photos (all optional together).
+	S3Endpoint        string
+	S3Region          string
+	S3Bucket          string
+	S3AccessKeyID     string
+	S3SecretAccessKey string
+
+	// Push notifications. Base64 of a Firebase service account JSON; optional.
+	FirebaseCredentialsB64 string
 }
 
 // IsProduction reports whether the service runs in production mode.
@@ -52,6 +71,17 @@ func Load() (*Config, error) {
 		SentryDSN:       os.Getenv("SENTRY_DSN"),
 		Release:         firstNonEmpty(os.Getenv("SENTRY_RELEASE"), os.Getenv("RENDER_GIT_COMMIT")),
 		CORSOrigins:     splitList(os.Getenv("CORS_ALLOWED_ORIGINS")),
+
+		ContactsMasterKey: strings.TrimSpace(os.Getenv("CONTACTS_MASTER_KEY")),
+		OTPProvider:       strings.ToLower(getEnv("OTP_PROVIDER", "console")),
+
+		S3Endpoint:        strings.TrimSpace(os.Getenv("AWS_ENDPOINT_URL_S3")),
+		S3Region:          strings.TrimSpace(os.Getenv("AWS_REGION")),
+		S3Bucket:          strings.TrimSpace(os.Getenv("S3_BUCKET")),
+		S3AccessKeyID:     strings.TrimSpace(os.Getenv("AWS_ACCESS_KEY_ID")),
+		S3SecretAccessKey: strings.TrimSpace(os.Getenv("AWS_SECRET_ACCESS_KEY")),
+
+		FirebaseCredentialsB64: strings.TrimSpace(os.Getenv("FIREBASE_CREDENTIALS_B64")),
 	}
 
 	var errs []error
@@ -70,6 +100,16 @@ func Load() (*Config, error) {
 		errs = append(errs, err)
 	}
 	if cfg.LoginRateLimt, err = getInt("LOGIN_RATE_LIMIT_PER_MINUTE", 10); err != nil {
+		errs = append(errs, err)
+	}
+
+	if cfg.ContactsRetentionDays, err = getInt("CONTACTS_RETENTION_DAYS", 30); err != nil {
+		errs = append(errs, err)
+	}
+	if cfg.RequireContactsToBook, err = getBool("REQUIRE_CONTACTS_FOR_BOOKING", true); err != nil {
+		errs = append(errs, err)
+	}
+	if cfg.OTPTTL, err = getDuration("OTP_TTL", 5*time.Minute); err != nil {
 		errs = append(errs, err)
 	}
 
@@ -95,6 +135,21 @@ func Load() (*Config, error) {
 	}
 	if cfg.RateLimit < 1 || cfg.LoginRateLimt < 1 {
 		errs = append(errs, errors.New("rate limits must be at least 1"))
+	}
+	if cfg.ContactsMasterKey == "" {
+		errs = append(errs, errors.New("CONTACTS_MASTER_KEY is required (generate with: openssl rand -base64 32)"))
+	}
+	if cfg.ContactsRetentionDays < 1 || cfg.ContactsRetentionDays > 365 {
+		errs = append(errs, errors.New("CONTACTS_RETENTION_DAYS must be between 1 and 365"))
+	}
+	if cfg.OTPTTL < time.Minute || cfg.OTPTTL > 15*time.Minute {
+		errs = append(errs, errors.New("OTP_TTL must be between 1m and 15m"))
+	}
+	if cfg.OTPProvider != "console" {
+		errs = append(errs, fmt.Errorf("OTP_PROVIDER %q is not supported yet (only \"console\")", cfg.OTPProvider))
+	}
+	if cfg.IsProduction() && cfg.OTPProvider == "console" {
+		errs = append(errs, errors.New("OTP_PROVIDER=console is not allowed in production because it writes login codes to the logs; implement an SMS provider first"))
 	}
 	for _, o := range cfg.CORSOrigins {
 		if o == "*" && cfg.Env == EnvProduction {
@@ -125,6 +180,18 @@ func getInt(key string, def int) (int, error) {
 		return 0, fmt.Errorf("%s must be an integer: %w", key, err)
 	}
 	return n, nil
+}
+
+func getBool(key string, def bool) (bool, error) {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def, nil
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return false, fmt.Errorf("%s must be true or false: %w", key, err)
+	}
+	return b, nil
 }
 
 func getDuration(key string, def time.Duration) (time.Duration, error) {

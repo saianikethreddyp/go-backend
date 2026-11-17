@@ -30,15 +30,27 @@ func validatePlate(p string) error {
 }
 
 // Service holds car business rules.
-type Service struct{ repo Repository }
+type Service struct {
+	repo   Repository
+	photos *Photos
+}
 
-func NewService(repo Repository) *Service { return &Service{repo: repo} }
+func NewService(repo Repository, photos *Photos) *Service {
+	return &Service{repo: repo, photos: photos}
+}
 
 var errPlateTaken = httpx.Conflict("a car with this plate already exists")
 
 // List returns cars, optionally filtered.
 func (s *Service) List(ctx context.Context, f Filter) ([]Car, int, error) {
-	return s.repo.List(ctx, f)
+	list, total, err := s.repo.List(ctx, f)
+	if err != nil {
+		return nil, 0, err
+	}
+	for i := range list {
+		list[i].Photos = s.photos.Resolve(ctx, list[i].PhotoKeys)
+	}
+	return list, total, nil
 }
 
 // Get returns one car.
@@ -50,6 +62,7 @@ func (s *Service) Get(ctx context.Context, id uuid.UUID) (*Car, error) {
 		}
 		return nil, err
 	}
+	c.Photos = s.photos.Resolve(ctx, c.PhotoKeys)
 	return c, nil
 }
 
@@ -74,6 +87,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*Car, error) {
 		}
 		return nil, err
 	}
+	c.Photos = s.photos.Resolve(ctx, c.PhotoKeys)
 	return c, nil
 }
 
@@ -104,6 +118,7 @@ func (s *Service) Update(ctx context.Context, id uuid.UUID, in UpdateInput) (*Ca
 		}
 		return nil, err
 	}
+	c.Photos = s.photos.Resolve(ctx, c.PhotoKeys)
 	return c, nil
 }
 

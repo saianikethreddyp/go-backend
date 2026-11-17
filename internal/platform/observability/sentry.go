@@ -14,7 +14,9 @@ import (
 // InitSentry configures Sentry and returns a flush function to call on shutdown.
 // With an empty DSN, Sentry runs disabled and every call is a no-op.
 func InitSentry(cfg *config.Config) (flush func(), err error) {
-	tracesRate := 0.0
+	// Sample every trace locally so a test request is visible; start low in
+	// production to control volume.
+	tracesRate := 1.0
 	if cfg.IsProduction() {
 		tracesRate = 0.1
 	}

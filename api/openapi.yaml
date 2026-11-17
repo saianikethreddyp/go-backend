@@ -70,7 +70,7 @@ paths:
         - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
       responses: { "200": { description: Page of cars } }
     post:
-      summary: Add a car to an active hub
+      summary: Add a car to an active hub (photos are uploaded separately)
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateCarRequest" } } } }
       responses: { "201": { description: Created }, "409": { $ref: "#/components/responses/Error" }, "422": { $ref: "#/components/responses/Error" } }
   /v1/cars/{id}:
@@ -78,9 +78,114 @@ paths:
     get: { summary: Get a car, responses: { "200": { description: Car }, "404": { $ref: "#/components/responses/Error" } } }
     patch: { summary: Update a car, responses: { "200": { description: Updated }, "404": { $ref: "#/components/responses/Error" } } }
     delete: { summary: Retire a car (soft delete), responses: { "204": { description: Retired } } }
+  /v1/public/hubs:
+    get: { summary: Active hubs (no login), security: [], responses: { "200": { description: Hubs } } }
+  /v1/public/cars:
+    get:
+      summary: Available cars (no login). Plates and photo keys are never exposed.
+      security: []
+      parameters:
+        - { name: hub_id, in: query, schema: { type: string, format: uuid } }
+        - { name: from, in: query, description: "RFC 3339. With `to`, only cars free for the whole window are returned.", schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: limit, in: query, schema: { type: integer, default: 20, maximum: 100 } }
+        - { name: offset, in: query, schema: { type: integer, default: 0 } }
+      responses: { "200": { description: Page of cars } }
+  /v1/public/cars/{id}:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    get: { summary: One available car, security: [], responses: { "200": { description: Car }, "404": { $ref: "#/components/responses/Error" } } }
+  /v1/customer/auth/otp/request:
+    post:
+      summary: Send a one-time code. intent=login needs an existing account (404 account_not_found otherwise); intent=signup needs a new number (409 account_exists otherwise).
+      security: []
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [phone, intent], properties: { phone: { type: string, example: "98765 43210" }, intent: { type: string, enum: [login, signup] } } } } } }
+      responses: { "200": { description: Code sent }, "404": { $ref: "#/components/responses/Error" }, "409": { $ref: "#/components/responses/Error" }, "429": { $ref: "#/components/responses/Error" } }
+  /v1/customer/auth/otp/verify:
+    post:
+      summary: Verify the code. signup creates the account (name required, 201). Returns tokens.
+      security: []
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [phone, intent, code], properties: { phone: { type: string }, intent: { type: string, enum: [login, signup] }, code: { type: string, minLength: 6, maxLength: 6 }, name: { type: string } } } } } }
+      responses: { "200": { description: Logged in }, "201": { description: Account created }, "401": { $ref: "#/components/responses/Error" } }
+  /v1/customer/auth/refresh:
+    post: { summary: Rotate a refresh token, security: [], requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/RefreshRequest" } } } }, responses: { "200": { description: New token pair } } }
+  /v1/customer/auth/logout:
+    post: { summary: Revoke the refresh token family, security: [], requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/RefreshRequest" } } } }, responses: { "204": { description: Logged out } } }
+  /v1/customer/me:
+    get: { summary: Current customer, security: [{ customerAuth: [] }], responses: { "200": { description: Customer } } }
+    patch: { summary: Update name, security: [{ customerAuth: [] }], requestBody: { required: true, content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string } } } } } }, responses: { "200": { description: Updated } } }
+  /v1/customer/bookings:
+    post:
+      summary: Book a car. Needs contacts to be synced first (428 contacts_required). Overlap with another booking is 409 car_booked.
+      security: [{ customerAuth: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [car_id, start_at, end_at], properties: { car_id: { type: string, format: uuid }, start_at: { type: string, format: date-time }, end_at: { type: string, format: date-time } } } } } }
+      responses: { "201": { description: Booking }, "404": { $ref: "#/components/responses/Error" }, "409": { $ref: "#/components/responses/Error" }, "422": { $ref: "#/components/responses/Error" }, "428": { $ref: "#/components/responses/Error" } }
+    get: { summary: My booking history, security: [{ customerAuth: [] }], responses: { "200": { description: Page of bookings } } }
+  /v1/customer/bookings/{id}:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    get: { summary: One of my bookings, security: [{ customerAuth: [] }], responses: { "200": { description: Booking }, "404": { $ref: "#/components/responses/Error" } } }
+  /v1/customer/bookings/{id}/cancel:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    post: { summary: Cancel a booking that has not started, security: [{ customerAuth: [] }], responses: { "200": { description: Cancelled }, "409": { $ref: "#/components/responses/Error" } } }
+  /v1/customer/contacts/sync:
+    post:
+      summary: Send the phone book. Numbers are normalized and deduplicated, so repeated syncs never create duplicates. Up to 10000 contacts.
+      security: [{ customerAuth: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [contacts], properties: { contacts: { type: array, items: { type: object, required: [phone], properties: { name: { type: string }, phone: { type: string } } } } } } } } }
+      responses: { "200": { description: "{received, added, updated, skipped, total}" }, "422": { $ref: "#/components/responses/Error" } }
+  /v1/customer/contacts/status:
+    get: { summary: "Stored contacts: synced, synced_at, count, can_delete", security: [{ customerAuth: [] }], responses: { "200": { description: Status } } }
+  /v1/customer/contacts/deletion:
+    post: { summary: "Delete my contacts (the post-ride form). Refused with 409 while a booking is confirmed or active.", security: [{ customerAuth: [] }], requestBody: { required: false, content: { application/json: { schema: { type: object, properties: { reason: { type: string, maxLength: 500 } } } } } }, responses: { "200": { description: "{deleted}" }, "409": { $ref: "#/components/responses/Error" } } }
+  /v1/customer/devices:
+    post: { summary: Register a push (FCM) token, security: [{ customerAuth: [] }], requestBody: { required: true, content: { application/json: { schema: { type: object, required: [fcm_token, platform], properties: { fcm_token: { type: string }, platform: { type: string, enum: [android, ios] } } } } } }, responses: { "204": { description: Registered } } }
+    delete: { summary: Unregister a push token, security: [{ customerAuth: [] }], requestBody: { required: true, content: { application/json: { schema: { type: object, required: [fcm_token], properties: { fcm_token: { type: string } } } } } }, responses: { "204": { description: Removed } } }
+  /v1/users:
+    get: { summary: "Admin: search customers by phone or name (q)", parameters: [{ name: q, in: query, schema: { type: string } }], responses: { "200": { description: Page of customers } } }
+  /v1/users/{id}:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    get: { summary: "Admin: one customer", responses: { "200": { description: Customer } } }
+  /v1/bookings:
+    get:
+      summary: "Admin: bookings with the customer. Filter by hub_id, user_id, status."
+      parameters:
+        - { name: hub_id, in: query, schema: { type: string, format: uuid } }
+        - { name: user_id, in: query, schema: { type: string, format: uuid } }
+        - { name: status, in: query, schema: { type: string, enum: [confirmed, active, completed, cancelled] } }
+      responses: { "200": { description: Page of bookings } }
+  /v1/bookings/{id}:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    get: { summary: "Admin: one booking", responses: { "200": { description: Booking } } }
+  /v1/bookings/{id}/start:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    post: { summary: "Admin: mark the ride started (confirmed to active)", responses: { "200": { description: Booking }, "409": { $ref: "#/components/responses/Error" } } }
+  /v1/bookings/{id}/complete:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    post: { summary: "Admin: mark the ride finished (active to completed)", responses: { "200": { description: Booking }, "409": { $ref: "#/components/responses/Error" } } }
+  /v1/bookings/{id}/cancel:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    post: { summary: "Admin: cancel a booking that has not started", responses: { "200": { description: Booking }, "409": { $ref: "#/components/responses/Error" } } }
+  /v1/bookings/{id}/contacts:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    get: { summary: "Admin: the customer's decrypted contacts. Allowed while the booking is open and for the retention period after completion. Every view is written to the audit log.", responses: { "200": { description: Contacts }, "403": { $ref: "#/components/responses/Error" } } }
+  /v1/cars/{id}/photos:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    post:
+      summary: "Admin: upload a photo (multipart field `file`; JPEG, PNG or WebP, up to 5 MB; at most 10 per car)"
+      requestBody: { required: true, content: { multipart/form-data: { schema: { type: object, properties: { file: { type: string, format: binary } } } } } }
+      responses: { "201": { description: Car with photos }, "422": { $ref: "#/components/responses/Error" }, "503": { $ref: "#/components/responses/Error" } }
+    delete:
+      summary: "Admin: delete a photo by key"
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [key], properties: { key: { type: string } } } } } }
+      responses: { "200": { description: Car } }
+  /v1/notifications:
+    post:
+      summary: "Admin: send a push notification to one customer"
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [user_id, title, body], properties: { user_id: { type: string, format: uuid }, title: { type: string }, body: { type: string } } } } } }
+      responses: { "200": { description: "{devices_notified}" } }
 components:
   securitySchemes:
-    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT, description: Admin access token }
+    customerAuth: { type: http, scheme: bearer, bearerFormat: JWT, description: Customer access token }
   parameters:
     Id: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
   responses:
@@ -160,4 +265,3 @@ components:
         transmission: { type: string, enum: [manual, automatic] }
         seats: { type: integer }
         price_per_day: { type: integer, description: INR whole rupees }
-        photos: { type: array, maxItems: 10, items: { type: string, format: uri, description: https only } }

@@ -11,6 +11,8 @@ func setValidEnv(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://u:p@localhost/db")
 	t.Setenv("DATABASE_URL_POOLED", "")
 	t.Setenv("JWT_ACCESS_SECRET", strings.Repeat("a", 32))
+	t.Setenv("CONTACTS_MASTER_KEY", "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
+	t.Setenv("OTP_PROVIDER", "console")
 }
 
 func TestLoadValid(t *testing.T) {
@@ -58,5 +60,32 @@ func TestLoadRequiresDatabase(t *testing.T) {
 	t.Setenv("DATABASE_URL", "")
 	if _, err := Load(); err == nil {
 		t.Fatal("expected error when database url is missing")
+	}
+}
+
+func TestLoadRejectsConsoleOTPInProduction(t *testing.T) {
+	setValidEnv(t)
+	t.Setenv("APP_ENV", "production")
+	if _, err := Load(); err == nil {
+		t.Fatal("console OTP must be refused in production")
+	}
+}
+
+func TestLoadRequiresContactsKey(t *testing.T) {
+	setValidEnv(t)
+	t.Setenv("CONTACTS_MASTER_KEY", "")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected error when CONTACTS_MASTER_KEY is missing")
+	}
+}
+
+func TestContactDefaults(t *testing.T) {
+	setValidEnv(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ContactsRetentionDays != 30 || !cfg.RequireContactsToBook {
+		t.Fatalf("unexpected defaults: %+v", cfg)
 	}
 }

@@ -26,7 +26,8 @@ type Car struct {
 	Transmission string    `json:"transmission"`
 	Seats        int       `json:"seats"`
 	PricePerDay  int       `json:"price_per_day"` // INR, whole rupees
-	Photos       []string  `json:"photos"`
+	PhotoKeys    []string  `json:"-"`             // object-storage keys
+	Photos       []Photo   `json:"photos"`        // filled in with download URLs
 	Status       string    `json:"status"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
@@ -43,7 +44,6 @@ type CreateInput struct {
 	Transmission string
 	Seats        int
 	PricePerDay  int
-	Photos       []string
 }
 
 // UpdateInput holds optional changes; nil fields are left untouched.
@@ -56,8 +56,14 @@ type UpdateInput struct {
 	Transmission *string
 	Seats        *int
 	PricePerDay  *int
-	Photos       []string // nil = unchanged, empty = clear
 	Status       *string
+}
+
+// Photo is one car photo. URL is a temporary download link; Key identifies the
+// photo when deleting it.
+type Photo struct {
+	Key string `json:"key"`
+	URL string `json:"url"`
 }
 
 // Filter narrows a list query.

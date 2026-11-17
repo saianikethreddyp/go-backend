@@ -17,6 +17,8 @@ type Repository interface {
 	Get(ctx context.Context, id uuid.UUID) (*Car, error)
 	Create(ctx context.Context, in CreateInput) (*Car, error)
 	Update(ctx context.Context, id uuid.UUID, in UpdateInput) (*Car, error)
+	AddPhoto(ctx context.Context, id uuid.UUID, key string, max int) (bool, error)
+	RemovePhoto(ctx context.Context, id uuid.UUID, key string) error
 }
 
 // PgRepository implements Repository on PostgreSQL.
@@ -29,11 +31,11 @@ const columns = `id, hub_id, brand, model, plate, year, fuel_type, transmission,
 func scan(row pgx.Row) (*Car, error) {
 	var c Car
 	if err := row.Scan(&c.ID, &c.HubID, &c.Brand, &c.Model, &c.Plate, &c.Year, &c.FuelType, &c.Transmission,
-		&c.Seats, &c.PricePerDay, &c.Photos, &c.Status, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		&c.Seats, &c.PricePerDay, &c.PhotoKeys, &c.Status, &c.CreatedAt, &c.UpdatedAt); err != nil {
 		return nil, dberr.Translate(err)
 	}
-	if c.Photos == nil {
-		c.Photos = []string{}
+	if c.PhotoKeys == nil {
+		c.PhotoKeys = []string{}
 	}
 	return &c, nil
 }
@@ -56,11 +58,11 @@ func (r *PgRepository) List(ctx context.Context, f Filter) ([]Car, int, error) {
 	for rows.Next() {
 		var c Car
 		if err := rows.Scan(&c.ID, &c.HubID, &c.Brand, &c.Model, &c.Plate, &c.Year, &c.FuelType, &c.Transmission,
-			&c.Seats, &c.PricePerDay, &c.Photos, &c.Status, &c.CreatedAt, &c.UpdatedAt, &total); err != nil {
+			&c.Seats, &c.PricePerDay, &c.PhotoKeys, &c.Status, &c.CreatedAt, &c.UpdatedAt, &total); err != nil {
 			return nil, 0, fmt.Errorf("scan car: %w", err)
 		}
-		if c.Photos == nil {
-			c.Photos = []string{}
+		if c.PhotoKeys == nil {
+			c.PhotoKeys = []string{}
 		}
 		out = append(out, c)
 	}
@@ -74,16 +76,12 @@ func (r *PgRepository) Get(ctx context.Context, id uuid.UUID) (*Car, error) {
 // Create inserts a car only if its hub exists and is active; otherwise it
 // returns dberr.ErrNotFound.
 func (r *PgRepository) Create(ctx context.Context, in CreateInput) (*Car, error) {
-	photos := in.Photos
-	if photos == nil {
-		photos = []string{}
-	}
 	return scan(r.pool.QueryRow(ctx,
-		`INSERT INTO cars (hub_id, brand, model, plate, year, fuel_type, transmission, seats, price_per_day, photos)
-		 SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+		`INSERT INTO cars (hub_id, brand, model, plate, year, fuel_type, transmission, seats, price_per_day)
+		 SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9
 		  WHERE EXISTS (SELECT 1 FROM hubs WHERE id = $1 AND active)
 		 RETURNING `+columns,
-		in.HubID, in.Brand, in.Model, in.Plate, in.Year, in.FuelType, in.Transmission, in.Seats, in.PricePerDay, photos))
+		in.HubID, in.Brand, in.Model, in.Plate, in.Year, in.FuelType, in.Transmission, in.Seats, in.PricePerDay))
 }
 
 func (r *PgRepository) Update(ctx context.Context, id uuid.UUID, in UpdateInput) (*Car, error) {
@@ -97,10 +95,27 @@ func (r *PgRepository) Update(ctx context.Context, id uuid.UUID, in UpdateInput)
 		    transmission  = COALESCE($7, transmission),
 		    seats         = COALESCE($8, seats),
 		    price_per_day = COALESCE($9, price_per_day),
-		    photos        = COALESCE($10, photos),
-		    status        = COALESCE($11, status),
+		    status        = COALESCE($10, status),
 		    updated_at    = now()
 		  WHERE id = $1
 		  RETURNING `+columns,
-		id, in.Brand, in.Model, in.Plate, in.Year, in.FuelType, in.Transmission, in.Seats, in.PricePerDay, in.Photos, in.Status))
+		id, in.Brand, in.Model, in.Plate, in.Year, in.FuelType, in.Transmission, in.Seats, in.PricePerDay, in.Status))
+}
+
+// AddPhoto appends a photo key unless the car already has max photos. It
+// reports whether the key was added.
+func (r *PgRepository) AddPhoto(ctx context.Context, id uuid.UUID, key string, max int) (bool, error) {
+	tag, err := r.pool.Exec(ctx,
+		`UPDATE cars SET photos = array_append(photos, $2), updated_at = now()
+		  WHERE id = $1 AND cardinality(photos) < $3`, id, key, max)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// RemovePhoto removes a photo key from the car.
+func (r *PgRepository) RemovePhoto(ctx context.Context, id uuid.UUID, key string) error {
+	_, err := r.pool.Exec(ctx, `UPDATE cars SET photos = array_remove(photos, $2), updated_at = now() WHERE id = $1`, id, key)
+	return err
 }

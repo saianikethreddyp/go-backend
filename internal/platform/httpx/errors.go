@@ -48,6 +48,18 @@ func Conflict(msg string) *AppError {
 	return &AppError{Status: http.StatusConflict, Code: "conflict", Message: msg}
 }
 
+func PreconditionRequired(code, msg string) *AppError {
+	return &AppError{Status: http.StatusPreconditionRequired, Code: code, Message: msg}
+}
+
+func TooManyRequests(msg string) *AppError {
+	return &AppError{Status: http.StatusTooManyRequests, Code: "rate_limited", Message: msg}
+}
+
+func ServiceUnavailable(msg string) *AppError {
+	return &AppError{Status: http.StatusServiceUnavailable, Code: "unavailable", Message: msg}
+}
+
 func PayloadTooLarge() *AppError {
 	return &AppError{Status: http.StatusRequestEntityTooLarge, Code: "payload_too_large", Message: "request body too large"}
 }

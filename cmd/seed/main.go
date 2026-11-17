@@ -16,6 +16,8 @@ import (
 
 	"github.com/saianikethreddyp/thandra-api/internal/auth"
 	"github.com/saianikethreddyp/thandra-api/internal/platform/database"
+	"github.com/saianikethreddyp/thandra-api/internal/platform/refreshstore"
+	"github.com/saianikethreddyp/thandra-api/internal/platform/tokens"
 )
 
 func main() {
@@ -49,7 +51,8 @@ func run() error {
 	defer pool.Close()
 
 	// The token manager is unused by seeding; the service only needs the repo.
-	svc := auth.NewService(auth.NewPgRepository(pool), auth.NewTokenManager(strings.Repeat("x", 32), time.Minute), time.Hour)
+	svc := auth.NewService(auth.NewPgRepository(pool), tokens.New(strings.Repeat("x", 32), time.Minute, tokens.AudienceAdmin),
+		refreshstore.New(pool, refreshstore.Admins), time.Hour)
 	created, err := svc.SeedAdmin(ctx, email, name, password)
 	if err != nil {
 		return err

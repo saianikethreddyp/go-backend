@@ -36,7 +36,7 @@ func Translate(err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
 		switch pgErr.Code {
-		case "23505": // unique_violation
+		case "23505", "23P01": // unique_violation, exclusion_violation
 			return &Error{Kind: ErrConflict, Constraint: pgErr.ConstraintName, Err: err}
 		case "23503": // foreign_key_violation
 			return &Error{Kind: ErrInvalidReference, Constraint: pgErr.ConstraintName, Err: err}

@@ -3,11 +3,11 @@ package auth
 import (
 	"context"
 	"net/http"
-	"strings"
 
 	"github.com/getsentry/sentry-go"
 
 	"github.com/saianikethreddyp/thandra-api/internal/platform/httpx"
+	"github.com/saianikethreddyp/thandra-api/internal/platform/tokens"
 )
 
 type ctxKey struct{}
@@ -34,27 +34,26 @@ func MustPrincipal(r *http.Request) (*Principal, error) {
 }
 
 // Middleware authenticates requests using bearer access tokens.
-type Middleware struct{ tokens *TokenManager }
+type Middleware struct{ tokens *tokens.Manager }
 
-func NewMiddleware(tokens *TokenManager) *Middleware { return &Middleware{tokens: tokens} }
+func NewMiddleware(tm *tokens.Manager) *Middleware { return &Middleware{tokens: tm} }
 
 // Authenticate requires a valid bearer token and stores the principal.
 func (m *Middleware) Authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		header := r.Header.Get("Authorization")
-		scheme, token, found := strings.Cut(header, " ")
-		if !found || !strings.EqualFold(scheme, "Bearer") || strings.TrimSpace(token) == "" {
+		token, ok := httpx.BearerToken(r)
+		if !ok {
 			httpx.WriteError(w, r, httpx.Unauthorized("missing or malformed bearer token"))
 			return
 		}
-		p, err := m.tokens.ParseAccessToken(strings.TrimSpace(token))
+		adminID, err := m.tokens.Parse(token)
 		if err != nil {
 			httpx.WriteError(w, r, httpx.Unauthorized("invalid or expired token"))
 			return
 		}
 		if hub := sentry.GetHubFromContext(r.Context()); hub != nil {
-			hub.Scope().SetUser(sentry.User{ID: p.AdminID.String()}) // id only, no PII
+			hub.Scope().SetUser(sentry.User{ID: adminID.String()}) // id only, no PII
 		}
-		next.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), p)))
+		next.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), &Principal{AdminID: adminID})))
 	})
 }

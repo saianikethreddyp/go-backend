@@ -13,6 +13,8 @@ import (
 	"github.com/saianikethreddyp/thandra-api/internal/platform/crypto"
 	"github.com/saianikethreddyp/thandra-api/internal/platform/dberr"
 	"github.com/saianikethreddyp/thandra-api/internal/platform/httpx"
+	"github.com/saianikethreddyp/thandra-api/internal/platform/refreshstore"
+	"github.com/saianikethreddyp/thandra-api/internal/platform/tokens"
 )
 
 const (
@@ -28,16 +30,24 @@ const (
 var errInvalidCredentials = httpx.Unauthorized("invalid email or password")
 var errInvalidRefreshToken = httpx.Unauthorized("invalid refresh token")
 
+// RefreshStore persists rotating refresh tokens.
+type RefreshStore interface {
+	Insert(ctx context.Context, ownerID, familyID uuid.UUID, hash []byte, expiresAt time.Time) error
+	Rotate(ctx context.Context, oldHash, newHash []byte, newExpiry time.Time) (uuid.UUID, error)
+	RevokeFamily(ctx context.Context, hash []byte) error
+}
+
 // Service holds the auth business logic.
 type Service struct {
 	repo       Repository
-	tokens     *TokenManager
+	tokens     *tokens.Manager
+	refresh    RefreshStore
 	refreshTTL time.Duration
 	now        func() time.Time
 }
 
-func NewService(repo Repository, tokens *TokenManager, refreshTTL time.Duration) *Service {
-	return &Service{repo: repo, tokens: tokens, refreshTTL: refreshTTL, now: time.Now}
+func NewService(repo Repository, tm *tokens.Manager, refresh RefreshStore, refreshTTL time.Duration) *Service {
+	return &Service{repo: repo, tokens: tm, refresh: refresh, refreshTTL: refreshTTL, now: time.Now}
 }
 
 // LoginResult is returned by a successful login.
@@ -90,16 +100,16 @@ func (s *Service) Login(ctx context.Context, email, password string) (*LoginResu
 }
 
 func (s *Service) issueNewFamily(ctx context.Context, admin *Admin, now time.Time) (*TokenPair, error) {
-	access, accessExp, err := s.tokens.NewAccessToken(admin, now)
+	access, accessExp, err := s.tokens.Issue(admin.ID, now)
 	if err != nil {
 		return nil, err
 	}
-	raw, hash, err := NewRefreshToken()
+	raw, hash, err := refreshstore.NewToken()
 	if err != nil {
 		return nil, err
 	}
 	refreshExp := now.Add(s.refreshTTL)
-	if err := s.repo.InsertRefreshToken(ctx, admin.ID, uuid.New(), hash, refreshExp); err != nil {
+	if err := s.refresh.Insert(ctx, admin.ID, uuid.New(), hash, refreshExp); err != nil {
 		return nil, err
 	}
 	return &TokenPair{AccessToken: access, AccessExpiresAt: accessExp, RefreshToken: raw, RefreshExpiresAt: refreshExp}, nil
@@ -108,16 +118,16 @@ func (s *Service) issueNewFamily(ctx context.Context, admin *Admin, now time.Tim
 // Refresh rotates a refresh token and returns a new token pair.
 func (s *Service) Refresh(ctx context.Context, rawRefresh string) (*TokenPair, error) {
 	now := s.now()
-	raw, newHash, err := NewRefreshToken()
+	raw, newHash, err := refreshstore.NewToken()
 	if err != nil {
 		return nil, err
 	}
 	refreshExp := now.Add(s.refreshTTL)
 
-	adminID, err := s.repo.RotateRefreshToken(ctx, HashRefreshToken(rawRefresh), newHash, refreshExp)
+	adminID, err := s.refresh.Rotate(ctx, refreshstore.Hash(rawRefresh), newHash, refreshExp)
 	if err != nil {
-		if errors.Is(err, ErrInvalidRefresh) || errors.Is(err, ErrRefreshReuse) {
-			if errors.Is(err, ErrRefreshReuse) {
+		if errors.Is(err, refreshstore.ErrInvalid) || errors.Is(err, refreshstore.ErrReuse) {
+			if errors.Is(err, refreshstore.ErrReuse) {
 				slog.WarnContext(ctx, "refresh token reuse detected; token family revoked")
 			}
 			return nil, errInvalidRefreshToken
@@ -129,7 +139,7 @@ func (s *Service) Refresh(ctx context.Context, rawRefresh string) (*TokenPair, e
 	if err != nil {
 		return nil, err
 	}
-	access, accessExp, err := s.tokens.NewAccessToken(admin, now)
+	access, accessExp, err := s.tokens.Issue(admin.ID, now)
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +149,7 @@ func (s *Service) Refresh(ctx context.Context, rawRefresh string) (*TokenPair, e
 // Logout revokes the refresh token family. It is idempotent and never reveals
 // whether the token existed.
 func (s *Service) Logout(ctx context.Context, rawRefresh string) error {
-	return s.repo.RevokeFamilyByToken(ctx, HashRefreshToken(rawRefresh))
+	return s.refresh.RevokeFamily(ctx, refreshstore.Hash(rawRefresh))
 }
 
 // Me returns the current admin.

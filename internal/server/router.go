@@ -15,9 +15,14 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/saianikethreddyp/thandra-api/internal/auth"
+	"github.com/saianikethreddyp/thandra-api/internal/bookings"
 	"github.com/saianikethreddyp/thandra-api/internal/cars"
+	"github.com/saianikethreddyp/thandra-api/internal/catalog"
 	"github.com/saianikethreddyp/thandra-api/internal/config"
+	"github.com/saianikethreddyp/thandra-api/internal/contacts"
+	"github.com/saianikethreddyp/thandra-api/internal/customer"
 	"github.com/saianikethreddyp/thandra-api/internal/hubs"
+	"github.com/saianikethreddyp/thandra-api/internal/notifications"
 	"github.com/saianikethreddyp/thandra-api/internal/platform/httpx"
 )
 
@@ -29,10 +34,17 @@ type Deps struct {
 	Log  *slog.Logger
 	Pool *pgxpool.Pool
 
-	AuthMW *auth.Middleware
-	Auth   *auth.Handler
-	Hubs   *hubs.Handler
-	Cars   *cars.Handler
+	AdminMW *auth.Middleware
+	Admin   *auth.Handler
+	Hubs    *hubs.Handler
+	Cars    *cars.Handler
+
+	CustomerMW    *customer.Middleware
+	Customer      *customer.Handler
+	Catalog       *catalog.Handler
+	Bookings      *bookings.Handler
+	Contacts      *contacts.Handler
+	Notifications *notifications.Handler
 }
 
 // NewRouter builds the full HTTP handler.
@@ -76,25 +88,69 @@ func NewRouter(d Deps) http.Handler {
 		return nil
 	}))
 
+	authLimit := httprate.Limit(d.Cfg.LoginRateLimt, time.Minute,
+		httprate.WithKeyFuncs(clientKey(d.Cfg.ProxyHops)), httprate.WithLimitHandler(rateLimited))
+
 	r.Route("/v1", func(v1 chi.Router) {
-		v1.Route("/auth", func(a chi.Router) {
-			// Stricter per-IP limit on credential endpoints.
-			a.Group(func(public chi.Router) {
-				public.Use(httprate.Limit(d.Cfg.LoginRateLimt, time.Minute,
-					httprate.WithKeyFuncs(clientKey(d.Cfg.ProxyHops)), httprate.WithLimitHandler(rateLimited)))
-				public.Post("/login", httpx.Handle(d.Auth.Login))
-				public.Post("/refresh", httpx.Handle(d.Auth.Refresh))
-				public.Post("/logout", httpx.Handle(d.Auth.Logout))
+		// Public catalog: browsing needs no login.
+		v1.Route("/public", func(p chi.Router) {
+			p.Get("/hubs", httpx.Handle(d.Catalog.Hubs))
+			p.Get("/cars", httpx.Handle(d.Catalog.Cars))
+			p.Get("/cars/{id}", httpx.Handle(d.Catalog.Car))
+		})
+
+		// Customer app.
+		v1.Route("/customer", func(c chi.Router) {
+			c.Route("/auth", func(a chi.Router) {
+				a.Use(authLimit)
+				a.Post("/otp/request", httpx.Handle(d.Customer.RequestOTP))
+				a.Post("/otp/verify", httpx.Handle(d.Customer.VerifyOTP))
+				a.Post("/refresh", httpx.Handle(d.Customer.Refresh))
+				a.Post("/logout", httpx.Handle(d.Customer.Logout))
 			})
-			a.With(d.AuthMW.Authenticate).Get("/me", httpx.Handle(d.Auth.Me))
+
+			c.Group(func(authed chi.Router) {
+				authed.Use(d.CustomerMW.Authenticate)
+				authed.Get("/me", httpx.Handle(d.Customer.Me))
+				authed.Patch("/me", httpx.Handle(d.Customer.UpdateMe))
+
+				authed.Route("/bookings", func(b chi.Router) {
+					b.Post("/", httpx.Handle(d.Bookings.Create))
+					b.Get("/", httpx.Handle(d.Bookings.ListMine))
+					b.Get("/{id}", httpx.Handle(d.Bookings.GetMine))
+					b.Post("/{id}/cancel", httpx.Handle(d.Bookings.CancelMine))
+				})
+
+				authed.Route("/contacts", func(ct chi.Router) {
+					ct.Post("/sync", httpx.Handle(d.Contacts.Sync))
+					ct.Get("/status", httpx.Handle(d.Contacts.Status))
+					ct.Post("/deletion", httpx.Handle(d.Contacts.Delete))
+				})
+
+				authed.Route("/devices", func(dv chi.Router) {
+					dv.Post("/", httpx.Handle(d.Notifications.RegisterDevice))
+					dv.Delete("/", httpx.Handle(d.Notifications.UnregisterDevice))
+				})
+			})
+		})
+
+		// Admin app.
+		v1.Route("/auth", func(a chi.Router) {
+			a.Group(func(public chi.Router) {
+				public.Use(authLimit)
+				public.Post("/login", httpx.Handle(d.Admin.Login))
+				public.Post("/refresh", httpx.Handle(d.Admin.Refresh))
+				public.Post("/logout", httpx.Handle(d.Admin.Logout))
+			})
+			a.With(d.AdminMW.Authenticate).Get("/me", httpx.Handle(d.Admin.Me))
 		})
 
 		v1.Group(func(admin chi.Router) {
-			admin.Use(d.AuthMW.Authenticate)
+			admin.Use(d.AdminMW.Authenticate)
 
 			admin.Route("/admins", func(ar chi.Router) {
-				ar.Get("/", httpx.Handle(d.Auth.ListAdmins))
-				ar.Post("/", httpx.Handle(d.Auth.CreateAdmin))
+				ar.Get("/", httpx.Handle(d.Admin.ListAdmins))
+				ar.Post("/", httpx.Handle(d.Admin.CreateAdmin))
 			})
 
 			admin.Route("/hubs", func(hr chi.Router) {
@@ -110,7 +166,25 @@ func NewRouter(d Deps) http.Handler {
 				cr.Get("/{id}", httpx.Handle(d.Cars.Get))
 				cr.Patch("/{id}", httpx.Handle(d.Cars.Update))
 				cr.Delete("/{id}", httpx.Handle(d.Cars.Retire))
+				cr.Post("/{id}/photos", httpx.Handle(d.Cars.UploadPhoto))
+				cr.Delete("/{id}/photos", httpx.Handle(d.Cars.DeletePhoto))
 			})
+
+			admin.Route("/users", func(ur chi.Router) {
+				ur.Get("/", httpx.Handle(d.Customer.AdminList))
+				ur.Get("/{id}", httpx.Handle(d.Customer.AdminGet))
+			})
+
+			admin.Route("/bookings", func(br chi.Router) {
+				br.Get("/", httpx.Handle(d.Bookings.AdminList))
+				br.Get("/{id}", httpx.Handle(d.Bookings.AdminGet))
+				br.Post("/{id}/start", httpx.Handle(d.Bookings.AdminStart()))
+				br.Post("/{id}/complete", httpx.Handle(d.Bookings.AdminComplete()))
+				br.Post("/{id}/cancel", httpx.Handle(d.Bookings.AdminCancel()))
+				br.Get("/{id}/contacts", httpx.Handle(d.Contacts.AdminBookingContacts))
+			})
+
+			admin.Post("/notifications", httpx.Handle(d.Notifications.AdminSend))
 		})
 	})
 
