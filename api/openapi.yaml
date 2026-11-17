@@ -1,0 +1,163 @@
+openapi: 3.0.3
+info:
+  title: Thandra API
+  version: 0.1.0
+  description: >
+    Backend for the Thandra customer app and admin app. This file is the contract
+    shared by both apps. Admin endpoints require `Authorization: Bearer <access_token>`.
+servers:
+  - url: http://localhost:8080
+security:
+  - bearerAuth: []
+paths:
+  /healthz:
+    get: { summary: Liveness probe, security: [], responses: { "200": { description: ok } } }
+  /readyz:
+    get: { summary: Readiness probe (checks database), security: [], responses: { "200": { description: ready }, "503": { description: database unavailable } } }
+  /v1/auth/login:
+    post:
+      summary: Admin login
+      security: []
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/LoginRequest" } } } }
+      responses:
+        "200": { description: Tokens and admin profile, content: { application/json: { schema: { $ref: "#/components/schemas/LoginResult" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+  /v1/auth/refresh:
+    post:
+      summary: Rotate a refresh token (single use; reuse revokes the whole session)
+      security: []
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/RefreshRequest" } } } }
+      responses:
+        "200": { description: New token pair, content: { application/json: { schema: { $ref: "#/components/schemas/TokenPair" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+  /v1/auth/logout:
+    post:
+      summary: Revoke a refresh token family (idempotent)
+      security: []
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/RefreshRequest" } } } }
+      responses: { "204": { description: Logged out } }
+  /v1/auth/me:
+    get:
+      summary: Current admin
+      responses: { "200": { description: Admin, content: { application/json: { schema: { $ref: "#/components/schemas/Admin" } } } } }
+  /v1/admins:
+    get: { summary: List admins, responses: { "200": { description: Admins } } }
+    post:
+      summary: Create an admin (every admin has full access)
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateAdminRequest" } } } }
+      responses: { "201": { description: Created }, "409": { $ref: "#/components/responses/Error" }, "422": { $ref: "#/components/responses/Error" } }
+  /v1/hubs:
+    get: { summary: List hubs, responses: { "200": { description: Hubs } } }
+    post:
+      summary: Create a hub
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateHubRequest" } } } }
+      responses: { "201": { description: Created }, "409": { $ref: "#/components/responses/Error" }, "422": { $ref: "#/components/responses/Error" } }
+  /v1/hubs/{id}:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    get: { summary: Get a hub, responses: { "200": { description: Hub }, "404": { $ref: "#/components/responses/Error" } } }
+    patch:
+      summary: Update or deactivate a hub. latitude and longitude must be sent together.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/UpdateHubRequest" } } } }
+      responses: { "200": { description: Updated }, "404": { $ref: "#/components/responses/Error" } }
+  /v1/cars:
+    get:
+      summary: List cars
+      parameters:
+        - { name: hub_id, in: query, schema: { type: string, format: uuid } }
+        - { name: status, in: query, schema: { type: string, enum: [available, maintenance, retired] } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+        - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+      responses: { "200": { description: Page of cars } }
+    post:
+      summary: Add a car to an active hub
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateCarRequest" } } } }
+      responses: { "201": { description: Created }, "409": { $ref: "#/components/responses/Error" }, "422": { $ref: "#/components/responses/Error" } }
+  /v1/cars/{id}:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    get: { summary: Get a car, responses: { "200": { description: Car }, "404": { $ref: "#/components/responses/Error" } } }
+    patch: { summary: Update a car, responses: { "200": { description: Updated }, "404": { $ref: "#/components/responses/Error" } } }
+    delete: { summary: Retire a car (soft delete), responses: { "204": { description: Retired } } }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+  parameters:
+    Id: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+  responses:
+    Error:
+      description: Error
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string, example: validation_failed }
+            message: { type: string }
+            details: { type: array, items: { type: object, properties: { field: { type: string }, message: { type: string } } } }
+            request_id: { type: string }
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties: { email: { type: string, format: email }, password: { type: string } }
+    RefreshRequest:
+      type: object
+      required: [refresh_token]
+      properties: { refresh_token: { type: string } }
+    TokenPair:
+      type: object
+      properties:
+        access_token: { type: string }
+        access_expires_at: { type: string, format: date-time }
+        refresh_token: { type: string }
+        refresh_expires_at: { type: string, format: date-time }
+    Admin:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string }
+        name: { type: string }
+        active: { type: boolean }
+        created_at: { type: string, format: date-time }
+    LoginResult:
+      type: object
+      properties: { tokens: { $ref: "#/components/schemas/TokenPair" }, admin: { $ref: "#/components/schemas/Admin" } }
+    CreateAdminRequest:
+      type: object
+      required: [email, name, password]
+      properties:
+        email: { type: string, format: email }
+        name: { type: string }
+        password: { type: string, minLength: 12, maxLength: 128 }
+    CreateHubRequest:
+      type: object
+      required: [name, address, latitude, longitude]
+      properties:
+        name: { type: string }
+        address: { type: string }
+        latitude: { type: number, minimum: -90, maximum: 90 }
+        longitude: { type: number, minimum: -180, maximum: 180 }
+    UpdateHubRequest:
+      type: object
+      properties:
+        name: { type: string }
+        address: { type: string }
+        latitude: { type: number }
+        longitude: { type: number }
+        active: { type: boolean }
+    CreateCarRequest:
+      type: object
+      required: [hub_id, brand, model, plate, year, fuel_type, transmission, seats, price_per_day]
+      properties:
+        hub_id: { type: string, format: uuid }
+        brand: { type: string }
+        model: { type: string }
+        plate: { type: string, example: TS09EA1234, description: Spaces and dashes are removed, uppercased }
+        year: { type: integer }
+        fuel_type: { type: string, enum: [petrol, diesel, electric, cng] }
+        transmission: { type: string, enum: [manual, automatic] }
+        seats: { type: integer }
+        price_per_day: { type: integer, description: INR whole rupees }
+        photos: { type: array, maxItems: 10, items: { type: string, format: uri, description: https only } }
