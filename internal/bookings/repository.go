@@ -3,6 +3,7 @@ package bookings
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -104,8 +105,11 @@ func (r *PgRepository) ListAll(ctx context.Context, f AdminFilter) ([]Detail, in
 	return r.list(ctx,
 		` WHERE ($1::uuid IS NULL OR b.hub_id = $1)
 		    AND ($2::uuid IS NULL OR b.user_id = $2)
-		    AND ($3::text IS NULL OR b.status = $3)`,
-		[]any{f.HubID, f.UserID, f.Status}, f.Limit, f.Offset)
+		    AND ($3::text IS NULL OR b.status = $3)
+		    AND ($4::timestamptz IS NULL OR b.start_at >= $4)
+		    AND ($5::timestamptz IS NULL OR b.start_at <  $5)
+		    AND ($6 = '' OR u.phone LIKE '%' || $6 || '%' OR u.name ILIKE '%' || $6 || '%')`,
+		[]any{f.HubID, f.UserID, f.Status, f.From, f.To, likeEscape(f.Query)}, f.Limit, f.Offset)
 }
 
 // Transition moves a booking to a new status if it currently has one of the
@@ -132,4 +136,9 @@ func (r *PgRepository) HasOpen(ctx context.Context, userID uuid.UUID) (bool, err
 		return false, err
 	}
 	return open, nil
+}
+
+// likeEscape makes user input safe to embed in a LIKE pattern.
+func likeEscape(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
 }

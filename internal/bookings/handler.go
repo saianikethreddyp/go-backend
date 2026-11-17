@@ -2,6 +2,7 @@ package bookings
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -113,6 +114,16 @@ func (h *Handler) AdminList(w http.ResponseWriter, r *http.Request) error {
 			return httpx.BadRequest("status must be one of: confirmed, active, completed, cancelled")
 		}
 	}
+	if f.From, err = parseTime(r, "from"); err != nil {
+		return err
+	}
+	if f.To, err = parseTime(r, "to"); err != nil {
+		return err
+	}
+	f.Query = strings.TrimSpace(r.URL.Query().Get("q"))
+	if len(f.Query) > 60 {
+		return httpx.BadRequest("q is too long")
+	}
 	list, total, err := h.svc.AdminList(r.Context(), f)
 	if err != nil {
 		return err
@@ -165,4 +176,16 @@ func (h *Handler) AdminCancel() httpx.HandlerFunc {
 	return h.adminAction(func(s *Service, r *http.Request, id uuid.UUID) (*AdminBooking, error) {
 		return s.AdminCancel(r.Context(), id)
 	})
+}
+
+func parseTime(r *http.Request, name string) (*time.Time, error) {
+	v := r.URL.Query().Get(name)
+	if v == "" {
+		return nil, nil
+	}
+	t, err := time.Parse(time.RFC3339, v)
+	if err != nil {
+		return nil, httpx.BadRequest(name + " must be an RFC 3339 timestamp, for example 2026-12-01T00:00:00+05:30")
+	}
+	return &t, nil
 }

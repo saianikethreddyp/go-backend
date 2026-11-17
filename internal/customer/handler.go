@@ -3,8 +3,11 @@ package customer
 import (
 	"context"
 	"net/http"
+	"sync"
+	"time"
 
 	"github.com/getsentry/sentry-go"
+	"github.com/google/uuid"
 
 	"github.com/saianikethreddyp/thandra-api/internal/platform/httpx"
 	"github.com/saianikethreddyp/thandra-api/internal/platform/tokens"
@@ -27,10 +30,39 @@ func MustPrincipal(r *http.Request) (*Principal, error) {
 	return p, nil
 }
 
-// Middleware authenticates customers with bearer access tokens.
-type Middleware struct{ tokens *tokens.Manager }
+// activeCacheTTL bounds how long a block can take to apply to a live session.
+const activeCacheTTL = 30 * time.Second
 
-func NewMiddleware(tm *tokens.Manager) *Middleware { return &Middleware{tokens: tm} }
+type activeEntry struct {
+	active bool
+	at     time.Time
+}
+
+// Middleware authenticates customers with bearer access tokens and rejects
+// blocked accounts (checked at most every activeCacheTTL per customer).
+type Middleware struct {
+	tokens   *tokens.Manager
+	isActive func(ctx context.Context, id uuid.UUID) (bool, error)
+	cache    sync.Map // uuid.UUID -> activeEntry
+}
+
+func NewMiddleware(tm *tokens.Manager, isActive func(ctx context.Context, id uuid.UUID) (bool, error)) *Middleware {
+	return &Middleware{tokens: tm, isActive: isActive}
+}
+
+func (m *Middleware) active(ctx context.Context, id uuid.UUID) (bool, error) {
+	if v, ok := m.cache.Load(id); ok {
+		if e := v.(activeEntry); time.Since(e.at) < activeCacheTTL {
+			return e.active, nil
+		}
+	}
+	ok, err := m.isActive(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	m.cache.Store(id, activeEntry{active: ok, at: time.Now()})
+	return ok, nil
+}
 
 func (m *Middleware) Authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -42,6 +74,15 @@ func (m *Middleware) Authenticate(next http.Handler) http.Handler {
 		id, err := m.tokens.Parse(token)
 		if err != nil {
 			httpx.WriteError(w, r, httpx.Unauthorized("invalid or expired token"))
+			return
+		}
+		live, err := m.active(r.Context(), id)
+		if err != nil {
+			httpx.WriteError(w, r, err)
+			return
+		}
+		if !live {
+			httpx.WriteError(w, r, &httpx.AppError{Status: http.StatusForbidden, Code: "account_disabled", Message: "this account has been disabled"})
 			return
 		}
 		if hub := sentry.GetHubFromContext(r.Context()); hub != nil {
@@ -182,6 +223,28 @@ func (h *Handler) AdminGet(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	u, err := h.svc.AdminGet(r.Context(), id)
+	if err != nil {
+		return err
+	}
+	httpx.JSON(w, http.StatusOK, u)
+	return nil
+}
+
+type setActiveRequest struct {
+	Active *bool `json:"active" validate:"required"`
+}
+
+// AdminSetActive handles PATCH /v1/users/{id}.
+func (h *Handler) AdminSetActive(w http.ResponseWriter, r *http.Request) error {
+	id, err := httpx.PathUUID(r, "id")
+	if err != nil {
+		return err
+	}
+	var req setActiveRequest
+	if err := httpx.DecodeJSON(w, r, &req); err != nil {
+		return err
+	}
+	u, err := h.svc.AdminSetActive(r.Context(), id, *req.Active)
 	if err != nil {
 		return err
 	}

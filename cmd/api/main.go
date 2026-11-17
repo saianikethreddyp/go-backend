@@ -23,6 +23,7 @@ import (
 	"github.com/saianikethreddyp/thandra-api/internal/config"
 	"github.com/saianikethreddyp/thandra-api/internal/contacts"
 	"github.com/saianikethreddyp/thandra-api/internal/customer"
+	"github.com/saianikethreddyp/thandra-api/internal/dashboard"
 	"github.com/saianikethreddyp/thandra-api/internal/hubs"
 	"github.com/saianikethreddyp/thandra-api/internal/jobs"
 	"github.com/saianikethreddyp/thandra-api/internal/notifications"
@@ -131,17 +132,18 @@ func run() error {
 		Log:  log,
 		Pool: pool,
 
-		AdminMW: auth.NewMiddleware(adminTokens),
+		AdminMW: auth.NewMiddleware(adminTokens, adminSvc.IsActive),
 		Admin:   auth.NewHandler(adminSvc),
 		Hubs:    hubs.NewHandler(hubs.NewService(hubs.NewPgRepository(pool))),
 		Cars:    cars.NewHandler(cars.NewService(cars.NewPgRepository(pool), photos)),
 
-		CustomerMW:    customer.NewMiddleware(customerTokens),
+		CustomerMW:    customer.NewMiddleware(customerTokens, customerSvc.IsActive),
 		Customer:      customer.NewHandler(customerSvc),
 		Catalog:       catalog.NewHandler(catalog.NewService(pool, photos)),
 		Bookings:      bookings.NewHandler(bookingSvc),
 		Contacts:      contacts.NewHandler(contactsSvc),
 		Notifications: notifications.NewHandler(notifier),
+		Dashboard:     dashboard.NewHandler(dashboard.NewService(pool)),
 	})
 
 	// Hourly cleanup: expired contacts, stale tokens, old one-time codes.

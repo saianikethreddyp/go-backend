@@ -136,6 +136,13 @@ func (s *Store) RevokeFamily(ctx context.Context, hash []byte) error {
 	return err
 }
 
+// RevokeAll revokes every live token of one owner, signing them out everywhere.
+func (s *Store) RevokeAll(ctx context.Context, ownerID uuid.UUID) error {
+	_, err := s.pool.Exec(ctx, fmt.Sprintf(
+		`UPDATE %s SET revoked_at = now() WHERE %s = $1 AND revoked_at IS NULL`, s.k.tokens, s.k.ownerCol), ownerID)
+	return err
+}
+
 // DeleteStale removes tokens that can no longer be used.
 func (s *Store) DeleteStale(ctx context.Context) (int64, error) {
 	tag, err := s.pool.Exec(ctx, fmt.Sprintf(

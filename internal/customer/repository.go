@@ -20,6 +20,7 @@ type Repository interface {
 	UpdateName(ctx context.Context, id uuid.UUID, name string) (*User, error)
 	List(ctx context.Context, query string, limit, offset int) ([]User, int, error)
 	ContactsSynced(ctx context.Context, id uuid.UUID) (bool, error)
+	SetActive(ctx context.Context, id uuid.UUID, active bool) (*User, error)
 }
 
 // PgRepository implements Repository on PostgreSQL.
@@ -91,4 +92,10 @@ func (r *PgRepository) ContactsSynced(ctx context.Context, id uuid.UUID) (bool, 
 	var synced bool
 	err := r.pool.QueryRow(ctx, `SELECT contacts_synced_at IS NOT NULL FROM users WHERE id = $1`, id).Scan(&synced)
 	return synced, dberr.Translate(err)
+}
+
+// SetActive blocks or unblocks a customer.
+func (r *PgRepository) SetActive(ctx context.Context, id uuid.UUID, active bool) (*User, error) {
+	return scan(r.pool.QueryRow(ctx,
+		`UPDATE users SET active = $2, updated_at = now() WHERE id = $1 RETURNING `+columns, id, active))
 }

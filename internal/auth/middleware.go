@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/getsentry/sentry-go"
+	"github.com/google/uuid"
 
 	"github.com/saianikethreddyp/thandra-api/internal/platform/httpx"
 	"github.com/saianikethreddyp/thandra-api/internal/platform/tokens"
@@ -34,9 +35,16 @@ func MustPrincipal(r *http.Request) (*Principal, error) {
 }
 
 // Middleware authenticates requests using bearer access tokens.
-type Middleware struct{ tokens *tokens.Manager }
+type Middleware struct {
+	tokens   *tokens.Manager
+	isActive func(ctx context.Context, id uuid.UUID) (bool, error)
+}
 
-func NewMiddleware(tm *tokens.Manager) *Middleware { return &Middleware{tokens: tm} }
+// NewMiddleware creates the middleware. isActive is checked on every request so
+// a deactivated admin loses access immediately, not when their token expires.
+func NewMiddleware(tm *tokens.Manager, isActive func(ctx context.Context, id uuid.UUID) (bool, error)) *Middleware {
+	return &Middleware{tokens: tm, isActive: isActive}
+}
 
 // Authenticate requires a valid bearer token and stores the principal.
 func (m *Middleware) Authenticate(next http.Handler) http.Handler {
@@ -49,6 +57,15 @@ func (m *Middleware) Authenticate(next http.Handler) http.Handler {
 		adminID, err := m.tokens.Parse(token)
 		if err != nil {
 			httpx.WriteError(w, r, httpx.Unauthorized("invalid or expired token"))
+			return
+		}
+		active, err := m.isActive(r.Context(), adminID)
+		if err != nil {
+			httpx.WriteError(w, r, err)
+			return
+		}
+		if !active {
+			httpx.WriteError(w, r, httpx.Unauthorized("this account has been deactivated"))
 			return
 		}
 		if hub := sentry.GetHubFromContext(r.Context()); hub != nil {

@@ -28,6 +28,7 @@ type RefreshStore interface {
 	Insert(ctx context.Context, ownerID, familyID uuid.UUID, hash []byte, expiresAt time.Time) error
 	Rotate(ctx context.Context, oldHash, newHash []byte, newExpiry time.Time) (uuid.UUID, error)
 	RevokeFamily(ctx context.Context, hash []byte) error
+	RevokeAll(ctx context.Context, ownerID uuid.UUID) error
 }
 
 var (
@@ -231,4 +232,34 @@ func (s *Service) AdminGet(ctx context.Context, id uuid.UUID) (*User, error) {
 // ContactsSynced reports whether the customer has an active contact sync.
 func (s *Service) ContactsSynced(ctx context.Context, id uuid.UUID) (bool, error) {
 	return s.repo.ContactsSynced(ctx, id)
+}
+
+// AdminSetActive blocks or unblocks a customer. Blocking also ends all of
+// their sessions; existing bookings are left untouched.
+func (s *Service) AdminSetActive(ctx context.Context, id uuid.UUID, active bool) (*User, error) {
+	u, err := s.repo.SetActive(ctx, id, active)
+	if err != nil {
+		if errors.Is(err, dberr.ErrNotFound) {
+			return nil, httpx.NotFound("customer")
+		}
+		return nil, err
+	}
+	if !active {
+		if err := s.refresh.RevokeAll(ctx, id); err != nil {
+			return nil, err
+		}
+	}
+	return u, nil
+}
+
+// IsActive reports whether the customer exists and is not blocked.
+func (s *Service) IsActive(ctx context.Context, id uuid.UUID) (bool, error) {
+	u, err := s.repo.GetByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, dberr.ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	return u.Active, nil
 }

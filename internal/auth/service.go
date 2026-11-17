@@ -35,6 +35,7 @@ type RefreshStore interface {
 	Insert(ctx context.Context, ownerID, familyID uuid.UUID, hash []byte, expiresAt time.Time) error
 	Rotate(ctx context.Context, oldHash, newHash []byte, newExpiry time.Time) (uuid.UUID, error)
 	RevokeFamily(ctx context.Context, hash []byte) error
+	RevokeAll(ctx context.Context, ownerID uuid.UUID) error
 }
 
 // Service holds the auth business logic.
@@ -86,10 +87,8 @@ func (s *Service) Login(ctx context.Context, email, password string) (*LoginResu
 		return nil, errInvalidCredentials
 	}
 
-	if admin.FailedAttempts > 0 || admin.LockedUntil != nil {
-		if err := s.repo.ResetLoginState(ctx, admin.ID); err != nil {
-			slog.ErrorContext(ctx, "reset login state", "error", err)
-		}
+	if err := s.repo.RecordLogin(ctx, admin.ID); err != nil {
+		slog.ErrorContext(ctx, "record login", "error", err)
 	}
 
 	pair, err := s.issueNewFamily(ctx, admin, now)

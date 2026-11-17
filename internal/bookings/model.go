@@ -78,6 +78,9 @@ type AdminFilter struct {
 	HubID  *uuid.UUID
 	UserID *uuid.UUID
 	Status *string
+	From   *time.Time // pickup at or after
+	To     *time.Time // pickup before
+	Query  string     // customer phone or name contains
 	Limit  int
 	Offset int
 }

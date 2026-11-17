@@ -61,8 +61,9 @@ The `Dockerfile` builds a minimal non-root image if you prefer Docker.
 
 | Area | Endpoints |
 |---|---|
-| Admin auth | `POST /v1/auth/login, refresh, logout`, `GET /v1/auth/me`, `GET/POST /v1/admins` |
-| Hubs and cars (admin) | `/v1/hubs`, `/v1/cars`, car photo upload and delete, `GET /v1/users` |
+| Admin auth | `POST /v1/auth/login, refresh, logout, change-password`, `GET /v1/auth/me`, `GET/POST /v1/admins`, `PATCH /v1/admins/{id}` (activate), `POST /v1/admins/{id}/reset-password` |
+| Dashboard | `GET /v1/dashboard` (pickups today, rides out, revenue this month in IST, fleet per hub) |
+| Hubs and cars (admin) | `/v1/hubs`, `/v1/cars`, car photo upload and delete, `GET /v1/users`, `PATCH /v1/users/{id}` (block) |
 | Public catalog | `GET /v1/public/hubs`, `/v1/public/cars` (filter by hub and free time window), `/v1/public/cars/{id}` |
 | Customer login | `POST /v1/customer/auth/otp/request, otp/verify, refresh, logout`, `GET/PATCH /v1/customer/me` |
 | Bookings | customer: create, list, get, cancel. admin: list, get, start, complete, cancel |

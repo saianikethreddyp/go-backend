@@ -21,6 +21,7 @@ import (
 	"github.com/saianikethreddyp/thandra-api/internal/config"
 	"github.com/saianikethreddyp/thandra-api/internal/contacts"
 	"github.com/saianikethreddyp/thandra-api/internal/customer"
+	"github.com/saianikethreddyp/thandra-api/internal/dashboard"
 	"github.com/saianikethreddyp/thandra-api/internal/hubs"
 	"github.com/saianikethreddyp/thandra-api/internal/notifications"
 	"github.com/saianikethreddyp/thandra-api/internal/platform/httpx"
@@ -45,6 +46,7 @@ type Deps struct {
 	Bookings      *bookings.Handler
 	Contacts      *contacts.Handler
 	Notifications *notifications.Handler
+	Dashboard     *dashboard.Handler
 }
 
 // NewRouter builds the full HTTP handler.
@@ -143,6 +145,7 @@ func NewRouter(d Deps) http.Handler {
 				public.Post("/logout", httpx.Handle(d.Admin.Logout))
 			})
 			a.With(d.AdminMW.Authenticate).Get("/me", httpx.Handle(d.Admin.Me))
+			a.With(d.AdminMW.Authenticate, authLimit).Post("/change-password", httpx.Handle(d.Admin.ChangePassword))
 		})
 
 		v1.Group(func(admin chi.Router) {
@@ -151,7 +154,11 @@ func NewRouter(d Deps) http.Handler {
 			admin.Route("/admins", func(ar chi.Router) {
 				ar.Get("/", httpx.Handle(d.Admin.ListAdmins))
 				ar.Post("/", httpx.Handle(d.Admin.CreateAdmin))
+				ar.Patch("/{id}", httpx.Handle(d.Admin.SetActive))
+				ar.Post("/{id}/reset-password", httpx.Handle(d.Admin.ResetPassword))
 			})
+
+			admin.Get("/dashboard", httpx.Handle(d.Dashboard.Get))
 
 			admin.Route("/hubs", func(hr chi.Router) {
 				hr.Get("/", httpx.Handle(d.Hubs.List))
@@ -173,6 +180,7 @@ func NewRouter(d Deps) http.Handler {
 			admin.Route("/users", func(ur chi.Router) {
 				ur.Get("/", httpx.Handle(d.Customer.AdminList))
 				ur.Get("/{id}", httpx.Handle(d.Customer.AdminGet))
+				ur.Patch("/{id}", httpx.Handle(d.Customer.AdminSetActive))
 			})
 
 			admin.Route("/bookings", func(br chi.Router) {

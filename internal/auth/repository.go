@@ -19,7 +19,9 @@ type Repository interface {
 	Create(ctx context.Context, a *Admin) (*Admin, error)
 	List(ctx context.Context) ([]Admin, error)
 	RecordFailedLogin(ctx context.Context, id uuid.UUID, maxAttempts int, lockFor time.Duration) error
-	ResetLoginState(ctx context.Context, id uuid.UUID) error
+	RecordLogin(ctx context.Context, id uuid.UUID) error
+	SetActive(ctx context.Context, id uuid.UUID, active bool) (*Admin, error)
+	SetPassword(ctx context.Context, id uuid.UUID, hash string, mustChange bool) error
 }
 
 // PgRepository implements Repository on PostgreSQL.
@@ -27,11 +29,11 @@ type PgRepository struct{ pool *pgxpool.Pool }
 
 func NewPgRepository(pool *pgxpool.Pool) *PgRepository { return &PgRepository{pool: pool} }
 
-const adminColumns = `id, email, name, password_hash, active, failed_attempts, locked_until, created_at`
+const adminColumns = `id, email, name, password_hash, active, failed_attempts, locked_until, last_login_at, must_change_password, created_at`
 
 func scanAdmin(row pgx.Row) (*Admin, error) {
 	var a Admin
-	err := row.Scan(&a.ID, &a.Email, &a.Name, &a.PasswordHash, &a.Active, &a.FailedAttempts, &a.LockedUntil, &a.CreatedAt)
+	err := row.Scan(&a.ID, &a.Email, &a.Name, &a.PasswordHash, &a.Active, &a.FailedAttempts, &a.LockedUntil, &a.LastLoginAt, &a.MustChangePassword, &a.CreatedAt)
 	if err != nil {
 		return nil, dberr.Translate(err)
 	}
@@ -84,8 +86,27 @@ func (r *PgRepository) RecordFailedLogin(ctx context.Context, id uuid.UUID, maxA
 	return err
 }
 
-func (r *PgRepository) ResetLoginState(ctx context.Context, id uuid.UUID) error {
+// RecordLogin clears the failure counter and stamps the last login time.
+func (r *PgRepository) RecordLogin(ctx context.Context, id uuid.UUID) error {
 	_, err := r.pool.Exec(ctx,
-		`UPDATE admins SET failed_attempts = 0, locked_until = NULL, updated_at = now() WHERE id = $1`, id)
+		`UPDATE admins SET failed_attempts = 0, locked_until = NULL, last_login_at = now(), updated_at = now() WHERE id = $1`, id)
+	return err
+}
+
+// SetActive enables or disables an admin. Disabling is refused (no row
+// returned) when it would leave no active admin.
+func (r *PgRepository) SetActive(ctx context.Context, id uuid.UUID, active bool) (*Admin, error) {
+	return scanAdmin(r.pool.QueryRow(ctx,
+		`UPDATE admins SET active = $2, updated_at = now()
+		  WHERE id = $1
+		    AND ($2 OR EXISTS (SELECT 1 FROM admins o WHERE o.id <> $1 AND o.active))
+		  RETURNING `+adminColumns, id, active))
+}
+
+// SetPassword replaces the password hash and clears any lockout.
+func (r *PgRepository) SetPassword(ctx context.Context, id uuid.UUID, hash string, mustChange bool) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE admins SET password_hash = $2, must_change_password = $3, failed_attempts = 0, locked_until = NULL, updated_at = now()
+		  WHERE id = $1`, id, hash, mustChange)
 	return err
 }

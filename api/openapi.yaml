@@ -47,6 +47,25 @@ paths:
       summary: Create an admin (every admin has full access)
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateAdminRequest" } } } }
       responses: { "201": { description: Created }, "409": { $ref: "#/components/responses/Error" }, "422": { $ref: "#/components/responses/Error" } }
+  /v1/dashboard:
+    get: { summary: "Admin: headline numbers (pickups today, active rides, revenue this month in IST, fleet per hub)", responses: { "200": { description: Dashboard } } }
+  /v1/auth/change-password:
+    post:
+      summary: "Change my password. Signs out other devices and returns a fresh token pair."
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [current_password, new_password], properties: { current_password: { type: string }, new_password: { type: string, minLength: 12, maxLength: 128 } } } } } }
+      responses: { "200": { description: New token pair }, "422": { $ref: "#/components/responses/Error" } }
+  /v1/admins/{id}:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    patch:
+      summary: "Activate or deactivate an admin. You cannot deactivate yourself or the last active admin. Deactivation ends their sessions immediately."
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [active], properties: { active: { type: boolean } } } } } }
+      responses: { "200": { description: Admin }, "409": { $ref: "#/components/responses/Error" } }
+  /v1/admins/{id}/reset-password:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    post:
+      summary: "Set a temporary password for another admin. They are signed out and flagged must_change_password."
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [new_password], properties: { new_password: { type: string, minLength: 12 } } } } } }
+      responses: { "204": { description: Reset } }
   /v1/hubs:
     get: { summary: List hubs, responses: { "200": { description: Hubs } } }
     post:
@@ -144,6 +163,7 @@ paths:
   /v1/users/{id}:
     parameters: [{ $ref: "#/components/parameters/Id" }]
     get: { summary: "Admin: one customer", responses: { "200": { description: Customer } } }
+    patch: { summary: "Admin: block or unblock a customer. Blocking signs them out everywhere; bookings are kept.", requestBody: { required: true, content: { application/json: { schema: { type: object, required: [active], properties: { active: { type: boolean } } } } } }, responses: { "200": { description: Customer } } }
   /v1/bookings:
     get:
       summary: "Admin: bookings with the customer. Filter by hub_id, user_id, status."
@@ -151,6 +171,9 @@ paths:
         - { name: hub_id, in: query, schema: { type: string, format: uuid } }
         - { name: user_id, in: query, schema: { type: string, format: uuid } }
         - { name: status, in: query, schema: { type: string, enum: [confirmed, active, completed, cancelled] } }
+        - { name: from, in: query, description: "Pickup at or after (RFC 3339)", schema: { type: string, format: date-time } }
+        - { name: to, in: query, description: "Pickup before (RFC 3339)", schema: { type: string, format: date-time } }
+        - { name: q, in: query, description: "Customer phone or name contains", schema: { type: string } }
       responses: { "200": { description: Page of bookings } }
   /v1/bookings/{id}:
     parameters: [{ $ref: "#/components/parameters/Id" }]
@@ -225,6 +248,8 @@ components:
         email: { type: string }
         name: { type: string }
         active: { type: boolean }
+        last_login_at: { type: string, format: date-time, nullable: true }
+        must_change_password: { type: boolean }
         created_at: { type: string, format: date-time }
     LoginResult:
       type: object
