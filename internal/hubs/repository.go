@@ -17,6 +17,7 @@ type Repository interface {
 	Get(ctx context.Context, id uuid.UUID) (*Hub, error)
 	Create(ctx context.Context, in CreateInput) (*Hub, error)
 	Update(ctx context.Context, id uuid.UUID, in UpdateInput) (*Hub, error)
+	Delete(ctx context.Context, id uuid.UUID) error
 }
 
 // PgRepository implements Repository on PostgreSQL.
@@ -74,4 +75,17 @@ func (r *PgRepository) Update(ctx context.Context, id uuid.UUID, in UpdateInput)
 		  WHERE id = $1
 		  RETURNING `+columns,
 		id, in.Name, in.Address, in.Latitude, in.Longitude, in.Active))
+}
+
+// Delete removes a hub. The foreign keys from cars and bookings stop the delete
+// when the hub is still referenced, which surfaces as dberr.ErrInvalidReference.
+func (r *PgRepository) Delete(ctx context.Context, id uuid.UUID) error {
+	tag, err := r.pool.Exec(ctx, `DELETE FROM hubs WHERE id = $1`, id)
+	if err != nil {
+		return dberr.Translate(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return &dberr.Error{Kind: dberr.ErrNotFound, Err: pgx.ErrNoRows}
+	}
+	return nil
 }

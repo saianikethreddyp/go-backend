@@ -81,3 +81,16 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) error {
 	httpx.JSON(w, http.StatusOK, hub)
 	return nil
 }
+
+// Delete handles DELETE /v1/hubs/{id}. Only hubs with no cars or bookings can be deleted.
+func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) error {
+	id, err := httpx.PathUUID(r, "id")
+	if err != nil {
+		return err
+	}
+	if err := h.svc.Delete(r.Context(), id); err != nil {
+		return err
+	}
+	httpx.NoContent(w)
+	return nil
+}

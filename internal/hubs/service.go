@@ -72,3 +72,18 @@ func (s *Service) Update(ctx context.Context, id uuid.UUID, in UpdateInput) (*Hu
 	}
 	return h, nil
 }
+
+// Delete permanently removes a hub that was never used. A hub that has (or ever had)
+// cars or bookings is kept for history, so the admin must deactivate it instead.
+func (s *Service) Delete(ctx context.Context, id uuid.UUID) error {
+	err := s.repo.Delete(ctx, id)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, dberr.ErrNotFound):
+		return httpx.NotFound("hub")
+	case errors.Is(err, dberr.ErrInvalidReference):
+		return httpx.Conflict("this hub has cars or bookings, so it cannot be deleted. Mark it inactive instead")
+	}
+	return err
+}

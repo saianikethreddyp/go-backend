@@ -165,6 +165,7 @@ func NewRouter(d Deps) http.Handler {
 				hr.Post("/", httpx.Handle(d.Hubs.Create))
 				hr.Get("/{id}", httpx.Handle(d.Hubs.Get))
 				hr.Patch("/{id}", httpx.Handle(d.Hubs.Update))
+				hr.Delete("/{id}", httpx.Handle(d.Hubs.Delete))
 			})
 
 			admin.Route("/cars", func(cr chi.Router) {

@@ -79,6 +79,9 @@ paths:
       summary: Update or deactivate a hub. latitude and longitude must be sent together.
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/UpdateHubRequest" } } } }
       responses: { "200": { description: Updated }, "404": { $ref: "#/components/responses/Error" } }
+    delete:
+      summary: Delete a hub. Only works when the hub has no cars or bookings; otherwise 409 and the hub should be deactivated instead.
+      responses: { "204": { description: Deleted }, "404": { $ref: "#/components/responses/Error" }, "409": { $ref: "#/components/responses/Error" } }
   /v1/cars:
     get:
       summary: List cars
